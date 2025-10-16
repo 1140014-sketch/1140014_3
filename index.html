@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>倖存者遊戲</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden; /* 隱藏滾動條 */
+        }
+        canvas {
+            background-color: #2d3748;
+            display: block;
+            border-radius: 0.5rem;
+        }
+        .hud-element {
+            position: absolute;
+            color: white;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        #xpBarContainer {
+            position: absolute;
+            bottom: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 50%;
+            height: 20px;
+            background-color: #4a5568;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+            overflow: hidden;
+        }
+        #xpBar {
+            width: 0%;
+            height: 100%;
+            background-color: #4299e1;
+            transition: width 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center h-screen m-0">
+
+    <div id="uiContainer" class="relative">
+        <canvas id="gameCanvas"></canvas>
+        <!-- 遊戲資訊介面 -->
+        <div id="healthDisplay" class="hud-element top-4 left-4 text-lg">生命: 100</div>
+        <div id="scoreDisplay" class="hud-element top-4 right-4 text-lg">分數: 0</div>
+        <button id="saveButton" class="hud-element top-12 left-4 bg-gray-600 hover:bg-gray-700 text-white font-bold py-1 px-3 rounded-md text-sm transition duration-300">存檔</button>
+        <div id="levelDisplay" class="hud-element bottom-12 left-1/2 -translate-x-1/2 text-lg">等級: 1</div>
+        <div id="xpBarContainer">
+            <div id="xpBar"></div>
+        </div>
+        <div id="saveMessage" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white font-bold py-3 px-6 rounded-lg z-30">
+            遊戲已儲存！
+        </div>
+    </div>
+    
+    <!-- 開始遊戲畫面 -->
+    <div id="startScreen" class="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center text-white z-20">
+        <h1 class="text-5xl font-bold mb-4">倖存者</h1>
+        <p class="text-xl mb-8">使用 WASD 或方向鍵移動，活下去！</p>
+        <button id="startButton" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-2xl transition duration-300">開始新遊戲</button>
+        <button id="loadButton" class="mt-4 bg-yellow-500 hover:bg-yellow-700 text-white font-bold py-3 px-6 rounded-lg text-2xl transition duration-300">讀取存檔</button>
+    </div>
+
+    <!-- 遊戲結束畫面 -->
+    <div id="gameOverScreen" class="hidden absolute inset-0 bg-black bg-opacity-70 flex-col items-center justify-center text-white z-20">
+        <h1 class="text-5xl font-bold mb-4 text-red-500">遊戲結束</h1>
+        <p class="text-2xl mb-2">你的最終分數:</p>
+        <p id="finalScore" class="text-4xl font-bold mb-8">0</p>
+        <button id="restartButton" class="bg-green-500 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-2xl transition duration-300">重新開始</button>
+    </div>
+    
+    <!-- 升級畫面 -->
+    <div id="levelUpScreen" class="hidden absolute inset-0 bg-black bg-opacity-80 flex-col items-center justify-center text-white z-10">
+        <h1 class="text-4xl font-bold mb-8">選擇一個升級！</h1>
+        <div id="skillOptions" class="flex gap-6">
+            <!-- 技能選項會動態生成於此 -->
+        </div>
+    </div>
+
+
+    <script>
+        // 取得 HTML 元素
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const healthDisplay = document.getElementById('healthDisplay');
+        const levelDisplay = document.getElementById('levelDisplay');
+        const xpBar = document.getElementById('xpBar');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const levelUpScreen = document.getElementById('levelUpScreen');
+        const skillOptions = document.getElementById('skillOptions');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+        const finalScore = document.getElementById('finalScore');
+        const saveButton = document.getElementById('saveButton');
+        const loadButton = document.getElementById('loadButton');
+        const saveMessage = document.getElementById('saveMessage');
+
+
+        let animationFrameId;
+        let gameRunning = false;
+        let gamePaused = false;
+
+        // 設定畫布大小
+        function resizeCanvas() {
+            canvas.width = window.innerWidth * 0.9;
+            canvas.height = window.innerHeight * 0.9;
+            const uiContainer = document.getElementById('uiContainer');
+            uiContainer.style.width = `${canvas.width}px`;
+            uiContainer.style.height = `${canvas.height}px`;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        
+        // 遊戲變數
+        let player, score;
+        let projectiles = [], enemies = [], experienceOrbs = [], aoeAttacks = [];
+        let enemySpawnInterval, shootInterval, difficultyInterval, aoeInterval, bossSpawnInterval;
+
+        // 玩家技能狀態
+        let playerSkills = {};
+
+        // 按鍵監聽
+        const keys = {
+            w: false, a: false, s: false, d: false,
+            ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false
+        };
+
+        window.addEventListener('keydown', (e) => {
+            if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+        });
+
+        // 類別定義
+        class Player {
+            constructor(x, y, radius, color, speed) {
+                this.x = x; this.y = y; this.radius = radius;
+                this.color = color; this.speed = speed;
+                this.health = 100; this.maxHealth = 100;
+                this.level = 1; this.xp = 0; this.xpToNextLevel = 100;
+                this.pickupRadius = 100;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.pickupRadius, 0, Math.PI * 2, false);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color; ctx.fill();
+            }
+            update() {
+                if (gamePaused) return;
+                if ((keys.w || keys.ArrowUp) && this.y - this.radius > 0) this.y -= this.speed;
+                if ((keys.s || keys.ArrowDown) && this.y + this.radius < canvas.height) this.y += this.speed;
+                if ((keys.a || keys.ArrowLeft) && this.x - this.radius > 0) this.x -= this.speed;
+                if ((keys.d || keys.ArrowRight) && this.x + this.radius < canvas.width) this.x += this.speed;
+                this.draw();
+            }
+            gainXP(amount) {
+                this.xp += amount;
+                if (this.xp >= this.xpToNextLevel) {
+                    this.xp -= this.xpToNextLevel;
+                    this.level++;
+                    this.xpToNextLevel = Math.floor(this.xpToNextLevel * 1.5);
+                    levelUp();
+                }
+                updateUI();
+            }
+        }
+
+        class Projectile { 
+            constructor(x, y, radius, color, velocity) {
+                this.x = x; this.y = y; this.radius = radius;
+                this.color = color; this.velocity = velocity;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color; ctx.fill();
+            }
+            update() { this.x += this.velocity.x; this.y += this.velocity.y; this.draw(); }
+        }
+
+        class Enemy { 
+            constructor(x, y, radius, color, velocity, health = 1) {
+                this.x = x; this.y = y; this.radius = radius;
+                this.color = color; this.velocity = velocity;
+                this.health = health;
+                this.maxHealth = health;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color; ctx.fill();
+
+                if (this.maxHealth > 1) {
+                    const barWidth = this.radius * 2;
+                    const barHeight = 10;
+                    const barX = this.x - this.radius;
+                    const barY = this.y - this.radius - barHeight - 5;
+                    
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(barX, barY, barWidth, barHeight);
+
+                    ctx.fillStyle = 'red';
+                    const healthPercentage = this.health / this.maxHealth;
+                    ctx.fillRect(barX, barY, barWidth * healthPercentage, barHeight);
+                }
+            }
+            update() {
+                const angle = Math.atan2(player.y - this.y, player.x - this.x);
+                let speed = this instanceof Boss ? 0.8 : 1;
+                this.velocity.x = Math.cos(angle) * speed;
+                this.velocity.y = Math.sin(angle) * speed;
+                this.x += this.velocity.x; this.y += this.velocity.y;
+                this.draw();
+            }
+        }
+
+        class Boss extends Enemy {
+            constructor(x, y, health) {
+                const angle = Math.atan2(player.y - y, player.x - x);
+                const velocity = { x: Math.cos(angle), y: Math.sin(angle) };
+                super(x, y, 50, 'purple', velocity, health || 100);
+            }
+        }
+        
+        class ExperienceOrb {
+            constructor(x, y, radius, color, xpValue) {
+                this.x = x; this.y = y; this.radius = radius;
+                this.color = color; this.xpValue = xpValue;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color; ctx.fill();
+            }
+            update() {
+                const dist = Math.hypot(player.x - this.x, player.y - this.y);
+                if (dist < player.pickupRadius) {
+                    const angle = Math.atan2(player.y - this.y, player.x - this.x);
+                    const speed = 5;
+                    this.x += Math.cos(angle) * speed;
+                    this.y += Math.sin(angle) * speed;
+                }
+                this.draw();
+            }
+        }
+        
+        class AoeAttack {
+            constructor(x, y, maxRadius, color, duration) {
+                this.x = x; this.y = y; this.maxRadius = maxRadius;
+                this.color = color; this.duration = duration;
+                this.life = 0; this.radius = 0; this.hitEnemies = new Set();
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 100, 100, ${1 - this.life / this.duration})`;
+                ctx.lineWidth = 4; ctx.stroke();
+            }
+            update() {
+                this.life++;
+                this.radius = (this.life / this.duration) * this.maxRadius;
+                this.draw();
+            }
+        }
+
+        const allSkills = {
+            increaseFireRate: { name: "提升射速", description: "子彈發射速度提升 15%" },
+            increaseMoveSpeed: { name: "提升移速", description: "移動速度提升 10%" },
+            addProjectile: { name: "額外子彈", description: "增加一個額外的投射物" },
+            aoeDamage: { name: "傷害光環", description: "週期性地對周圍敵人造成傷害" },
+            increasePickupRadius: { name: "拾取範圍", description: "自動拾取經驗的範圍擴大 50%" },
+            unlimitedAmmo: { name: "無限子彈", description: "子彈如暴雨般傾瀉而出！" }
+        };
+
+        function init(savedState = null) {
+            projectiles = []; aoeAttacks = [];
+
+            if (savedState) {
+                // 從存檔恢復
+                const pData = savedState.player;
+                player = new Player(pData.x, pData.y, pData.radius, pData.color, pData.speed);
+                Object.assign(player, pData);
+
+                playerSkills = savedState.playerSkills;
+                score = savedState.score;
+
+                enemies = savedState.enemies.map(eData => {
+                    const angle = Math.atan2(player.y - eData.y, player.x - eData.x);
+                    const velocity = { x: Math.cos(angle), y: Math.sin(angle) };
+                    if (eData.type === 'boss') {
+                        return new Boss(eData.x, eData.y, eData.health);
+                    }
+                    return new Enemy(eData.x, eData.y, eData.radius, eData.color, velocity, eData.health);
+                });
+
+                experienceOrbs = savedState.experienceOrbs.map(oData => {
+                    return new ExperienceOrb(oData.x, oData.y, oData.radius, oData.color, oData.xpValue);
+                });
+
+            } else {
+                // 開始新遊戲
+                player = new Player(canvas.width / 2, canvas.height / 2, 15, 'hsl(200, 100%, 50%)', 4);
+                enemies = []; experienceOrbs = [];
+                score = 0;
+                playerSkills = {
+                    fireRate: 500,
+                    projectiles: 1,
+                };
+            }
+            
+            updateUI();
+            
+            let spawnRate = 1000;
+
+            [enemySpawnInterval, shootInterval, difficultyInterval, aoeInterval, bossSpawnInterval].forEach(clearInterval);
+
+            enemySpawnInterval = setInterval(spawnEnemy, spawnRate);
+            shootInterval = setInterval(shoot, playerSkills.fireRate);
+            bossSpawnInterval = setInterval(spawnBoss, 90000);
+            
+            if (playerSkills.aoe) {
+                 aoeInterval = setInterval(() => {
+                    if (!gamePaused) aoeAttacks.push(new AoeAttack(player.x, player.y, 100, 'red', 30));
+                 }, 3000);
+            }
+
+            difficultyInterval = setInterval(() => {
+                clearInterval(enemySpawnInterval);
+                spawnRate = Math.max(200, spawnRate * 0.95);
+                enemySpawnInterval = setInterval(spawnEnemy, spawnRate);
+            }, 5000);
+        }
+
+        function updateUI() {
+            healthDisplay.textContent = `生命: ${player.health}`;
+            scoreDisplay.textContent = `分數: ${score}`;
+            levelDisplay.textContent = `等級: ${player.level}`;
+            xpBar.style.width = `${(player.xp / player.xpToNextLevel) * 100}%`;
+        }
+
+        function spawnEnemy() {
+             if (gamePaused) return;
+             const radius = Math.random() * 20 + 10;
+             let x, y;
+             if (Math.random() < 0.5) {
+                 x = Math.random() < 0.5 ? 0 - radius : canvas.width + radius;
+                 y = Math.random() * canvas.height;
+             } else {
+                 x = Math.random() * canvas.width;
+                 y = Math.random() < 0.5 ? 0 - radius : canvas.height + radius;
+             }
+             const color = `hsl(${Math.random() * 360}, 50%, 50%)`;
+             const angle = Math.atan2(player.y - y, player.x - x);
+             const velocity = { x: Math.cos(angle), y: Math.sin(angle) };
+             enemies.push(new Enemy(x, y, radius, color, velocity));
+        }
+        
+        function spawnBoss() {
+            if (gamePaused) return;
+            const radius = 50;
+            let x, y;
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? 0 - radius : canvas.width + radius;
+                y = Math.random() * canvas.height;
+            } else {
+                x = Math.random() * canvas.width;
+                y = Math.random() < 0.5 ? 0 - radius : canvas.height + radius;
+            }
+            enemies.push(new Boss(x, y));
+        }
+
+
+        function shoot() {
+             if (gamePaused || enemies.length === 0) return;
+            
+             let nearestEnemy = null;
+             let minDistance = Infinity;
+             enemies.forEach(enemy => {
+                 const dist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+                 if (dist < minDistance) {
+                     minDistance = dist;
+                     nearestEnemy = enemy;
+                 }
+             });
+             
+             if (nearestEnemy) {
+                const mainAngle = Math.atan2(nearestEnemy.y - player.y, nearestEnemy.x - player.x);
+                const spread = 0.2;
+                for (let i = 0; i < playerSkills.projectiles; i++) {
+                    const angle = mainAngle + (i - (playerSkills.projectiles - 1) / 2) * spread;
+                    const velocity = { x: Math.cos(angle) * 6, y: Math.sin(angle) * 6 };
+                    projectiles.push(new Projectile(player.x, player.y, 5, 'white', velocity));
+                }
+             }
+        }
+        
+        function levelUp() {
+            gamePaused = true;
+            skillOptions.innerHTML = '';
+            const choices = generateSkillChoices(3);
+            choices.forEach(skillKey => {
+                const skill = allSkills[skillKey];
+                const button = document.createElement('button');
+                button.className = "bg-indigo-600 hover:bg-indigo-800 text-white font-bold p-6 rounded-lg transition duration-300 w-48 h-48 flex flex-col items-center justify-center text-center";
+                button.innerHTML = `<h2 class="text-xl mb-2">${skill.name}</h2><p class="text-sm font-normal">${skill.description}</p>`;
+                button.onclick = () => selectSkill(skillKey);
+                skillOptions.appendChild(button);
+            });
+            levelUpScreen.classList.remove('hidden');
+            levelUpScreen.classList.add('flex');
+        }
+
+        function generateSkillChoices(num) {
+            const keys = Object.keys(allSkills);
+            const shuffled = keys.sort(() => 0.5 - Math.random());
+            return shuffled.slice(0, num);
+        }
+
+        function selectSkill(skillKey) {
+            switch(skillKey) {
+                case 'increaseFireRate':
+                    playerSkills.fireRate = Math.max(100, playerSkills.fireRate * 0.85);
+                    clearInterval(shootInterval);
+                    shootInterval = setInterval(shoot, playerSkills.fireRate);
+                    break;
+                case 'increaseMoveSpeed':
+                    player.speed *= 1.10;
+                    break;
+                case 'addProjectile':
+                    playerSkills.projectiles++;
+                    break;
+                case 'aoeDamage':
+                    if (!playerSkills.aoe) {
+                        playerSkills.aoe = { level: 1 };
+                        aoeInterval = setInterval(() => {
+                           if (!gamePaused) aoeAttacks.push(new AoeAttack(player.x, player.y, 100, 'red', 30));
+                        }, 3000);
+                    }
+                    break;
+                case 'increasePickupRadius':
+                    player.pickupRadius *= 1.5;
+                    break;
+                case 'unlimitedAmmo':
+                    playerSkills.fireRate = 50;
+                    clearInterval(shootInterval);
+                    shootInterval = setInterval(shoot, playerSkills.fireRate);
+                    break;
+            }
+            levelUpScreen.classList.add('hidden');
+            levelUpScreen.classList.remove('flex');
+            gamePaused = false;
+        }
+
+        function animate() {
+            animationFrameId = requestAnimationFrame(animate);
+            ctx.fillStyle = 'rgba(45, 55, 72, 0.2)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            player.update();
+            
+            if (gamePaused) return;
+            
+            [projectiles, enemies, experienceOrbs, aoeAttacks].forEach(arr => arr.forEach(item => item.update()));
+            
+            handleCollisions();
+
+            projectiles = projectiles.filter(p => p.x > 0 && p.x < canvas.width && p.y > 0 && p.y < canvas.height);
+            aoeAttacks = aoeAttacks.filter(a => a.life <= a.duration);
+        }
+
+        function handleCollisions() {
+            experienceOrbs.forEach((orb, index) => {
+                const dist = Math.hypot(player.x - orb.x, player.y - orb.y);
+                if (dist - orb.radius - player.radius < 1) {
+                    player.gainXP(orb.xpValue);
+                    experienceOrbs.splice(index, 1);
+                }
+            });
+
+            enemies.forEach((enemy, eIndex) => {
+                const playerDist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+                if (playerDist - enemy.radius - player.radius < 1) {
+                    player.health -= 10;
+                    if (player.health < 0) player.health = 0;
+                    updateUI();
+                    enemies.splice(eIndex, 1);
+                    if (player.health <= 0) endGame();
+                    return;
+                }
+
+                projectiles.forEach((projectile, pIndex) => {
+                    const projDist = Math.hypot(projectile.x - enemy.x, projectile.y - enemy.y);
+                    if (projDist - enemy.radius - projectile.radius < 1) {
+                        enemy.health -= 1;
+                        projectiles.splice(pIndex, 1);
+
+                        if (enemy.health <= 0) {
+                            const isBoss = enemy instanceof Boss;
+                            score += isBoss ? 2000 : 100;
+                            const xpValue = isBoss ? 500 : 20;
+                            const orbColor = isBoss ? 'gold' : 'cyan';
+                            const orbRadius = isBoss ? 15 : 5;
+
+                            updateUI();
+                            experienceOrbs.push(new ExperienceOrb(enemy.x, enemy.y, orbRadius, orbColor, xpValue));
+                            enemies.splice(eIndex, 1);
+                        }
+                        return;
+                    }
+                });
+
+                aoeAttacks.forEach(attack => {
+                    if (attack.hitEnemies.has(enemy)) return;
+                    const aoeDist = Math.hypot(attack.x - enemy.x, attack.y - enemy.y);
+                    if (aoeDist - enemy.radius - attack.radius < 1) {
+                        attack.hitEnemies.add(enemy);
+                        enemy.health -= 1; 
+
+                        if (enemy.health <= 0) {
+                            const isBoss = enemy instanceof Boss;
+                            score += isBoss ? 2000 : 50;
+                            const xpValue = isBoss ? 500 : 10;
+                            const orbColor = isBoss ? 'gold' : 'cyan';
+                            const orbRadius = isBoss ? 15 : 5;
+
+                            updateUI();
+                            experienceOrbs.push(new ExperienceOrb(enemy.x, enemy.y, orbRadius, orbColor, xpValue));
+                            enemies.splice(eIndex, 1);
+                        }
+                        return;
+                    }
+                });
+            });
+        }
+        
+        function startGame(savedState = null) {
+            init(savedState);
+            gameRunning = true;
+            gamePaused = false;
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            animate();
+        }
+
+        function endGame() {
+            gameRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            [enemySpawnInterval, shootInterval, difficultyInterval, aoeInterval, bossSpawnInterval].forEach(clearInterval);
+            finalScore.textContent = score;
+            gameOverScreen.classList.remove('hidden');
+            gameOverScreen.classList.add('flex');
+        }
+
+        function saveGame() {
+            if (!gameRunning) return;
+            const gameState = {
+                player: player,
+                playerSkills: playerSkills,
+                score: score,
+                enemies: enemies.map(e => ({
+                    x: e.x, y: e.y, radius: e.radius, color: e.color, health: e.health,
+                    type: e instanceof Boss ? 'boss' : 'enemy'
+                })),
+                experienceOrbs: experienceOrbs.map(orb => ({
+                    x: orb.x, y: orb.y, radius: orb.radius, color: orb.color, xpValue: orb.xpValue
+                }))
+            };
+            localStorage.setItem('survivorGameSave', JSON.stringify(gameState));
+            
+            saveMessage.classList.remove('hidden');
+            setTimeout(() => {
+                saveMessage.classList.add('hidden');
+            }, 1500);
+        }
+
+        function loadGame() {
+            const savedData = localStorage.getItem('survivorGameSave');
+            if (savedData) {
+                startGame(JSON.parse(savedData));
+            }
+        }
+        
+        function checkSaveFile() {
+             if (!localStorage.getItem('survivorGameSave')) {
+                loadButton.disabled = true;
+                loadButton.classList.add('opacity-50', 'cursor-not-allowed');
+            } else {
+                loadButton.disabled = false;
+                loadButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        startButton.addEventListener('click', () => startGame());
+        restartButton.addEventListener('click', () => startGame());
+        saveButton.addEventListener('click', saveGame);
+        loadButton.addEventListener('click', loadGame);
+
+        // 頁面載入時檢查是否有存檔
+        window.onload = checkSaveFile;
+
+    </script>
+</body>
+</html>
+
